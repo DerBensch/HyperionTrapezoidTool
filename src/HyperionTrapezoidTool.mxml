@@ -1,0 +1,408 @@
+<?xml version="1.0" encoding="utf-8"?>
+<s:WindowedApplication xmlns:fx="http://ns.adobe.com/mxml/2009"
+					   xmlns:s="library://ns.adobe.com/flex/spark"
+					   xmlns:mx="library://ns.adobe.com/flex/mx"
+					   width="1024"
+					   height="768"
+					   showStatusBar="false"
+					   resize="resizeHandler(event)"
+					   creationComplete="creationCompleteHandler(event)"
+					   mouseDown="application_mouseDownHandler(event)"
+					   mouseUp="application_mouseUpHandler(event)">
+	<fx:Script>
+		<![CDATA[
+			import mx.events.CloseEvent;
+			import mx.events.FlexEvent;
+			import mx.events.ResizeEvent;
+			import mx.managers.PopUpManager;
+			import mx.utils.StringUtil;
+			import derBen.screens.OutputWindow;
+			import derBen.valueObjects.LED;
+
+			private static var matrix:Matrix = new Matrix();
+
+			private var au:Number = 0;
+
+			private var av:Number = 0;
+
+			private var ax:Number;
+
+			private var ay:Number;
+
+			private var bitmapData:BitmapData;
+
+			private var bu:Number = 1;
+
+			private var bv:Number = 0;
+
+			private var bx:Number;
+
+			private var by:Number;
+
+			private var configFile:File = File.desktopDirectory;
+
+			private var configLoaded:Boolean;
+
+			private var cu:Number = 1;
+
+			private var cv:Number = 1;
+
+			private var cx:Number;
+
+			private var cy:Number;
+
+			private var downIndex:int = -1;
+
+			private var du:Number = 0;
+
+			private var dv:Number = 1;
+
+			private var dx:Number;
+
+			private var dy:Number;
+
+			private var imageFile:File = File.desktopDirectory;
+
+			private var imageHeight:Number;
+
+			private var imageWidth:Number;
+
+			private var imageX:Number;
+
+			private var imageY:Number;
+
+			private var leds:Vector.<LED> = new Vector.<LED>();
+
+			private var loader:Loader;
+
+			private var outputWindow:OutputWindow;
+
+			private var stageHeight:Number;
+
+			private var stageWidth:Number;
+
+			private function application_mouseDownHandler(event:MouseEvent):void {
+				var mouseX:Number = event.stageX - 10;
+				var mouseY:Number = event.stageY - 40;
+				var distanceSquared:Number = (mouseX - ax) * (mouseX - ax) + (mouseY - ay) * (mouseY - ay);
+				if (distanceSquared < 100) {
+					downIndex = 0;
+					addEventListener(MouseEvent.MOUSE_MOVE, mouseMoveHandler);
+					return;
+				}
+				distanceSquared = (mouseX - bx) * (mouseX - bx) + (mouseY - by) * (mouseY - by);
+				if (distanceSquared < 100) {
+					downIndex = 1;
+					addEventListener(MouseEvent.MOUSE_MOVE, mouseMoveHandler);
+					return;
+				}
+				distanceSquared = (mouseX - cx) * (mouseX - cx) + (mouseY - cy) * (mouseY - cy);
+				if (distanceSquared < 100) {
+					downIndex = 2;
+					addEventListener(MouseEvent.MOUSE_MOVE, mouseMoveHandler);
+					return;
+				}
+				distanceSquared = (mouseX - dx) * (mouseX - dx) + (mouseY - dy) * (mouseY - dy);
+				if (distanceSquared < 100) {
+					downIndex = 3;
+					addEventListener(MouseEvent.MOUSE_MOVE, mouseMoveHandler);
+					return;
+				}
+			}
+
+			private function application_mouseUpHandler(event:MouseEvent):void {
+				removeEventListener(MouseEvent.MOUSE_MOVE, mouseMoveHandler);
+				downIndex = -1;
+			}
+
+			private function configFile_selectHandler(event:Event):void {
+				configFile.removeEventListener(Event.SELECT, configFile_selectHandler);
+				try {
+					var fileStream:FileStream = new FileStream();
+					fileStream.open(configFile, FileMode.READ);
+					var string:String = fileStream.readUTFBytes(fileStream.bytesAvailable);
+					fileStream.close();
+				} catch (e:Error) {
+					statusLabel.text = "Error during the loading of the config file";
+					return;
+				}
+				if (!string) {
+					statusLabel.text = "Empty config file";
+					return;
+				}
+				string = string.split("\r").join("\n");
+				string = string.split("\n\n").join("\n");
+				var array:Array = string.split("\n");
+				var length:int = array.length;
+				for (var i:int; i < length; i++) {
+					string = StringUtil.trim(array[i] as String);
+					if (string.indexOf("//") === 0) {
+						array.splice(i, 1);
+						i--;
+						length--;
+					}
+				}
+				string = array.join("\n");
+				try {
+					var json:Object = JSON.parse(string);
+				} catch (e:Error) {
+					statusLabel.text = "Error during the parsing of the config file";
+					return;
+				}
+
+				leds.length = 0;
+				var ledsArray:Array = json.leds as Array;
+				if (!ledsArray && json is Array)
+					ledsArray = json as Array;
+				if (ledsArray)
+					length = ledsArray.length;
+				else
+					length = 0;
+				var led:LED;
+				var usedIndices:Object = {};
+				var used:Number;
+				for (i = 0; i < length; i++) {
+					led = new LED(ledsArray[i]);
+					if (led.valid) {
+						used = usedIndices[led.index];
+						if (used >= 0) {
+							statusLabel.text = "Duplicate LED index found (index " + i + ")";
+							return;
+						}
+						usedIndices[led.index] = 1;
+						leds.push(led);
+					} else {
+						statusLabel.text = "Error during the parsing of the LEDs (during index " + i + ")";
+						return;
+					}
+				}
+				configLoaded = true;
+				exportConfigButton.enabled = true;
+				statusLabel.text = "Config file loaded: " + leds.length + " LEDs";
+				au = 0;
+				av = 0;
+				bu = 1;
+				bv = 0;
+				cu = 1;
+				cv = 1;
+				du = 0;
+				dv = 1;
+
+				if (bitmapData)
+					update();
+			}
+
+			private function creationCompleteHandler(event:FlexEvent):void {
+				update();
+			}
+
+			private function exportConfigButton_clickHandler(event:MouseEvent):void {
+				if (configLoaded && bitmapData) {
+					var length:int = leds.length;
+					var output:String = "[\n";
+					output += leds.join(",\n");
+					output += "\n]";
+					outputWindow = new OutputWindow(output);
+					outputWindow.addEventListener(CloseEvent.CLOSE, outputWindow_closeHandler);
+					PopUpManager.addPopUp(outputWindow, this, true);
+					outputWindow.recalculateSize(width, height);
+				}
+			}
+
+			private function imageFile_selectHandler(event:Event):void {
+				imageFile.removeEventListener(Event.SELECT, imageFile_selectHandler);
+				if (!loader) {
+					loader = new Loader();
+					loader.contentLoaderInfo.addEventListener(Event.COMPLETE, loader_completeHandler);
+				}
+				loader.load(new URLRequest(imageFile.url));
+			}
+
+			private function importConfigButton_clickHandler(event:MouseEvent):void {
+				configFile.addEventListener(Event.SELECT, configFile_selectHandler);
+				configFile.browseForOpen("Select an config file (HyperionNG LED only data also work)", [new FileFilter("JSON", "*.json")]);
+			}
+
+			private function loader_completeHandler(event:Event):void {
+				var bitmap:Bitmap = loader.content as Bitmap;
+				if (bitmap)
+					bitmapData = bitmap.bitmapData;
+				else
+					bitmapData = null;
+				update();
+			}
+
+			private function mouseMoveHandler(event:MouseEvent):void {
+				if (downIndex < 0)
+					return;
+				var mouseX:Number = event.stageX - 10 - imageX;
+				var mouseY:Number = event.stageY - 40 - imageY;
+				var u:Number = Math.max(0, Math.min(1, mouseX / imageWidth));
+				var v:Number = Math.max(0, Math.min(1, mouseY / imageHeight));
+
+				if (downIndex === 0) {
+					au = u;
+					av = v;
+				} else if (downIndex === 1) {
+					bu = u;
+					bv = v;
+				} else if (downIndex === 2) {
+					cu = u;
+					cv = v;
+				} else if (downIndex === 3) {
+					du = u;
+					dv = v;
+				}
+
+				update();
+			}
+
+			private function outputWindow_closeHandler(event:CloseEvent):void {
+				outputWindow.removeEventListener(CloseEvent.CLOSE, outputWindow_closeHandler);
+				PopUpManager.removePopUp(outputWindow);
+				outputWindow = null;
+			}
+
+			private function resizeHandler(event:ResizeEvent):void {
+				update();
+				if (outputWindow)
+					outputWindow.recalculateSize(width, height);
+			}
+
+			private function selectImageButton_clickHandler(event:MouseEvent):void {
+				imageFile.addEventListener(Event.SELECT, imageFile_selectHandler);
+				imageFile.browseForOpen("Select an image file", [new FileFilter("Image", "*.jpg;*.jpeg;*.png;*.jxr")]);
+			}
+
+			private function update():void {
+				if (!canvas)
+					return;
+				var graphics:Graphics = canvas.graphics;
+				graphics.clear();
+				if (!bitmapData)
+					return;
+				imageWidth = bitmapData.width;
+				imageHeight = bitmapData.height;
+				stageWidth = width - 20;
+				stageHeight = height - 50;
+				var scale:Number = Math.min(stageWidth / imageWidth, stageHeight / imageHeight);
+				imageWidth *= scale;
+				imageHeight *= scale;
+
+				imageX = Math.round((stageWidth - imageWidth) * 0.5);
+				imageY = Math.round((stageHeight - imageHeight) * 0.5);
+
+				matrix.identity();
+				matrix.scale(scale, scale);
+				matrix.translate(imageX, imageY);
+				graphics.beginBitmapFill(bitmapData, matrix, false, true);
+				graphics.drawRect(imageX, imageY, imageWidth, imageHeight);
+				graphics.endFill();
+
+				if (!configLoaded)
+					return;
+
+				ax = imageX + imageWidth * au;
+				ay = imageY + imageHeight * av;
+
+				bx = imageX + imageWidth * bu;
+				by = imageY + imageHeight * bv;
+
+				cx = imageX + imageWidth * cu;
+				cy = imageY + imageHeight * cv;
+
+				dx = imageX + imageWidth * du;
+				dy = imageY + imageHeight * dv;
+
+				graphics.beginFill(0xff0000);
+				graphics.drawCircle(ax, ay, 3);
+				graphics.drawCircle(bx, by, 3);
+				graphics.drawCircle(cx, cy, 3);
+				graphics.drawCircle(dx, dy, 3);
+				graphics.endFill();
+
+				var u:Number;
+				var v:Number;
+				var p1x:Number;
+				var p2x:Number;
+				var p1y:Number;
+				var p2y:Number;
+
+				var length:int = leds.length;
+				var led:LED;
+				var targetX1:Number;
+				var targetY1:Number;
+				var targetX2:Number;
+				var targetY2:Number;
+				var targetWidth:Number;
+				var targetHeight:Number;
+				for (var i:int; i < length; i++) {
+					led = leds[i];
+
+					u = led.hMin;
+					v = led.vMin;
+
+					p1x = ax + (bx - ax) * u;
+					p2x = dx + (cx - dx) * u;
+
+					targetX1 = v * (p2x - p1x) + p1x;
+
+					p1y = ay + (by - ay) * u;
+					p2y = dy + (cy - dy) * u;
+
+					targetY1 = v * (p2y - p1y) + p1y;
+
+					u = led.hMax;
+					v = led.vMax;
+
+					p1x = ax + (bx - ax) * u;
+					p2x = dx + (cx - dx) * u;
+
+					targetX2 = v * (p2x - p1x) + p1x;
+
+					p1y = ay + (by - ay) * u;
+					p2y = dy + (cy - dy) * u;
+
+					targetY2 = v * (p2y - p1y) + p1y;
+
+					targetWidth = Math.max(1, Math.ceil(targetX2 - targetX1));
+					targetHeight = Math.max(1, Math.ceil(targetY2 - targetY1));
+
+					graphics.lineStyle(1);
+					graphics.beginFill(0xffffff, 0.2);
+					graphics.drawRect(targetX1, targetY1, targetWidth, targetHeight);
+					graphics.endFill();
+
+					targetX1 -= imageX;
+					targetY1 -= imageY;
+
+					led.setNewValuesTo(targetX1 / imageWidth, (targetX1 + targetWidth) / imageWidth, targetY1 / imageHeight, (targetY1 + targetHeight) / imageHeight);
+				}
+			}
+		]]>
+	</fx:Script>
+	<s:HGroup left="10"
+			  top="10"
+			  right="10"
+			  width="100%"
+			  verticalAlign="middle">
+		<s:Button id="selectImageButton"
+				  label="Select image"
+				  click="selectImageButton_clickHandler(event)"/>
+		<s:Button id="importConfigButton"
+				  label="Import config"
+				  click="importConfigButton_clickHandler(event)"/>
+		<s:Label id="statusLabel"
+				 width="100%"
+				 paddingTop="2"/>
+		<s:Button id="exportConfigButton"
+				  label="Export config"
+				  enabled="false"
+				  click="exportConfigButton_clickHandler(event)"/>
+	</s:HGroup>
+	<s:SpriteVisualElement id="canvas"
+						   left="10"
+						   top="40"
+						   right="10"
+						   bottom="10"/>
+</s:WindowedApplication>
